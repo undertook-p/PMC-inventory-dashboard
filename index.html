@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>แดชบอร์ดสต๊อกคลังสินค้าสำเร็จรูป</title>
+</head>
+<body>
+<!-- design-decisions
+role: internal ops dashboard (warehouse stock status), not an editorial piece
+stance: a warehouse manager needs to see what's about to run out before it does, not browse a spreadsheet
+claims: 1) overall scale of the catalog 2) which category is under more strain 3) which specific SKUs need action now 4) when each SKU's stock was actually produced (lot traceability)
+interaction per claim: KPI numbers ground scale; segmented bars per category make strain visible at a glance; a filterable/searchable/sortable table surfaces the actionable list; expandable rows reveal lot-level production dates
+fonts: system sans stack (Thai + Latin coverage without network fonts); monospace system stack for codes/numbers, since this is a data tool not a brand document
+-->
+<section id="app">
+
+  <header class="top">
+    <div class="label">คลังสินค้าสำเร็จรูป — สรุปสถานะ</div>
+    <h1>แดชบอร์ดสต๊อกกาว, พลาสติก, UV, หัวฉีด</h1>
+    <div class="sub">ข้อมูล ณ วันที่ 18 กันยายน 2026 · จากชีต Summary (ข้อมูลชุดคงที่ ไม่อัปเดตอัตโนมัติ)</div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="n mono" id="kpi-total-codes">–</div>
+      <div class="l">รหัสสินค้าทั้งหมด</div>
+    </div>
+    <div class="kpi">
+      <div class="n mono" id="kpi-total-lines">–</div>
+      <div class="l">รายการขนาดบรรจุ</div>
+    </div>
+    <div class="kpi urgent">
+      <div class="n mono" id="kpi-urgent">–</div>
+      <div class="l">ต้องสั่งด่วน (หมด/ต่ำกว่า Min)</div>
+    </div>
+    <div class="kpi watch">
+      <div class="n mono" id="kpi-nozero">–</div>
+      <div class="l">หมดสต๊อก แต่ยังไม่ตั้ง Min</div>
+    </div>
+  </div>
+
+  <div class="section-block">
+    <h2>ภาพรวมตามหมวด</h2>
+    <div id="section-bars"></div>
+    <div class="note">แถบแสดงสัดส่วนรายการในแต่ละหมวด แยกตามสถานะ: หมดสต๊อก (แดง) · ใกล้หมด/ต่ำกว่า Min (เหลือง) · ปกติ (เขียว) · ยังไม่ตั้งจุดสั่งซื้อ (เทา)</div>
+  </div>
+
+  <div class="section-block">
+    <h2>รายการสินค้า <span class="count" id="tbl-count-label"></span></h2>
+    <div class="controls">
+      <div class="chip" data-active="1" data-filter-status="urgent"><span class="dot" style="background:var(--red)"></span>ต้องสั่งด่วน</div>
+      <div class="chip" data-filter-status="ok"><span class="dot" style="background:var(--green)"></span>ปกติ</div>
+      <div class="chip" data-filter-status="unclassified"><span class="dot" style="background:var(--grey-status)"></span>ยังไม่ตั้ง Min</div>
+      <div class="chip" data-filter-status="all">ทั้งหมด</div>
+      <div class="searchbox">
+        <input type="text" id="search" placeholder="ค้นหารหัสสินค้า…">
+      </div>
+    </div>
+    <div class="note" style="margin-top:8px;">คลิกที่แถวซึ่งมีลูกศร ▸ เพื่อดู Lot (วันที่ผลิต และจำนวนต่อ Lot)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>รหัสสินค้า</th>
+            <th>ขนาดบรรจุ</th>
+            <th>หมวด</th>
+            <th class="num">จ่ายออก</th>
+            <th class="num">คงเหลือ</th>
+            <th class="num">Min</th>
+            <th>สถานะ</th>
+          </tr>
+        </thead>
+        <tbody id="tbl-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    <span>ที่มา: Google Sheet คลังสินค้าสำเร็จรูป (ชีต Summary, Stock กาวพิเศษ, Stock กาวธรรมดา)</span>
+    <span>สถานะคำนวณจาก คงเหลือ เทียบกับ Min ที่ตั้งไว้ในชีต</span>
+  </footer>
+
+</section>
+
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1d2129;
+    --panel-2: #242933;
+    --line: #323847;
+    --text: #e7e9ee;
+    --text-dim: #8b93a3;
+    --text-faint: #5c6373;
+    --amber: #e0a138;
+    --amber-dim: #4a3a1f;
+    --red: #e0554a;
+    --red-dim: #4a2420;
+    --green: #4fae8c;
+    --green-dim: #1f3d34;
+    --grey-status: #5c6373;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f1efe9;
+      --panel: #ffffff;
+      --panel-2: #f6f4ee;
+      --line: #ddd8cc;
+      --text: #23261f;
+      --text-dim: #6c6f63;
+      --text-faint: #9a9c8e;
+      --amber: #b47614;
+      --amber-dim: #f3e2c1;
+      --red: #b53e33;
+      --red-dim: #f5ddd9;
+      --green: #2f7d61;
+      --green-dim: #d9ece5;
+      --grey-status: #8a8d80;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f1efe9;
+    --panel: #ffffff;
+    --panel-2: #f6f4ee;
+    --line: #ddd8cc;
+    --text: #23261f;
+    --text-dim: #6c6f63;
+    --text-faint: #9a9c8e;
+    --amber: #b47614;
+    --amber-dim: #f3e2c1;
+    --red: #b53e33;
+    --red-dim: #f5ddd9;
+    --green: #2f7d61;
+    --green-dim: #d9ece5;
+    --grey-status: #8a8d80;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Noto Sans Thai UI", "Noto Sans Thai", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Noto Sans Mono", Consolas, monospace; }
+
+  #app { max-width: 1120px; margin: 0 auto; padding: 20px 16px 60px; }
+
+  header.top {
+    display: flex; flex-direction: column; gap: 4px;
+    padding-bottom: 18px; margin-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  header.top .label {
+    font-family: ui-monospace, monospace;
+    font-size: 12px; letter-spacing: 0.04em;
+    color: var(--text-faint);
+  }
+  header.top h1 {
+    font-size: clamp(20px, 4.2vw, 28px);
+    font-weight: 600; margin: 2px 0 0; line-height: 1.25;
+  }
+  header.top .sub {
+    color: var(--text-dim); font-size: 13.5px; margin-top: 6px;
+  }
+
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  @media (max-width: 640px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+  }
+  .kpi {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 14px 12px;
+  }
+  .kpi .n {
+    font-size: clamp(22px, 5vw, 30px);
+    font-weight: 600;
+    line-height: 1;
+  }
+  .kpi .l {
+    margin-top: 6px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+  .kpi.urgent .n { color: var(--red); }
+  .kpi.watch .n { color: var(--amber); }
+  .kpi.ok .n { color: var(--green); }
+
+  .section-block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .section-block h2 {
+    font-size: 15px; font-weight: 600; margin: 0 0 12px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; flex-wrap: wrap;
+  }
+  .section-block h2 .count {
+    font-weight: 400; font-size: 12px; color: var(--text-faint);
+    font-family: ui-monospace, monospace;
+  }
+
+  .controls {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .chip {
+    font-size: 12.5px;
+    padding: 7px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    transition: border-color .15s, color .15s;
+  }
+  .chip[data-active="1"] {
+    color: var(--text);
+    border-color: var(--text-dim);
+  }
+  .chip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-inline-end: 6px; }
+
+  .searchbox {
+    margin-left: auto;
+    display: flex; align-items: center;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 6px 12px;
+    min-width: 140px;
+  }
+  .searchbox input {
+    background: none; border: none; outline: none;
+    color: var(--text); font-family: inherit;
+    font-size: 13px; width: 100%;
+  }
+  .searchbox input::placeholder { color: var(--text-faint); }
+
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+  thead th {
+    text-align: left; font-weight: 500; color: var(--text-faint);
+    font-size: 11.5px; letter-spacing: 0.02em;
+    padding: 9px 12px; background: var(--panel-2);
+    border-bottom: 1px solid var(--line);
+  }
+  thead th.num, td.num { text-align: right; }
+  tbody td { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--panel-2); }
+  td.code { font-family: ui-monospace, monospace; font-weight: 500; }
+  td.num { font-family: ui-monospace, monospace; color: var(--text-dim); }
+  .status-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; padding: 3px 8px; border-radius: 12px;
+    font-family: ui-monospace, monospace;
+  }
+  .status-tag .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .st-out { background: var(--red-dim); color: var(--red); }
+  .st-low { background: var(--amber-dim); color: var(--amber); }
+  .st-ok { background: var(--green-dim); color: var(--green); }
+  .st-unclassified, .st-out_nomin { background: var(--panel-2); color: var(--text-faint); }
+
+  .empty-row td { text-align: center; color: var(--text-faint); padding: 24px 12px; }
+
+  tbody tr.has-lots { cursor: pointer; }
+  tbody tr.has-lots td.code::before {
+    content: "▸"; display: inline-block; margin-inline-end: 6px;
+    font-size: 10px; color: var(--text-faint); transition: transform .15s;
+  }
+  tbody tr.has-lots.expanded td.code::before { transform: rotate(90deg); }
+  tr.lot-detail-row { display: none; background: var(--panel-2); }
+  tr.lot-detail-row.open { display: table-row; }
+  tr.lot-detail-row td { padding: 10px 12px 12px 30px; border-bottom: 1px solid var(--line); }
+  .lot-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .lot-chip {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 9px; color: var(--text-dim); line-height: 1.5;
+  }
+  .lot-chip b { color: var(--text); font-weight: 500; }
+  .no-lots { font-size: 12px; color: var(--text-faint); }
+
+  .note {
+    font-size: 12px; color: var(--text-faint); margin-top: 10px; line-height: 1.6;
+  }
+
+  footer {
+    margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
+    color: var(--text-faint); font-size: 11.5px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px;
+  }
+</style>
+
+<script>
+const RECORDS = [{"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913", "size": "10 KG", "dispatch": 0, "remain": 37, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-05", "qty": 7.0}, {"lot": 2, "date": "2026-09-03", "qty": 10.0}, {"lot": 3, "date": "2026-09-10", "qty": 10.0}, {"lot": 4, "date": "2026-09-15", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "915F1", "size": "100 KG", "dispatch": 0, "remain": 10, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-05-06", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "924T", "size": "20 KG", "dispatch": 0, "remain": 99, "min": 25.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "929", "size": "20 KG", "dispatch": 0, "remain": 7, "min": 0.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-19", "qty": 7.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951", "size": "20 KG", "dispatch": 0, "remain": 15, "min": 8.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "958ITF/958ITF1", "size": "20 KG", "dispatch": 0, "remain": 60, "min": 10.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913", "size": "20 KG", "dispatch": -2, "remain": 55, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-24", "qty": 7.0}, {"lot": 2, "date": "2026-08-05", "qty": 8.0}, {"lot": 3, "date": "2026-08-15", "qty": 10.0}, {"lot": 4, "date": "2026-08-28", "qty": 10.0}, {"lot": 5, "date": "2026-09-10", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "915F1", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "924T", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "929", "size": "25 KG", "dispatch": 0, "remain": 0, "min": 8.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951", "size": "50 KG", "dispatch": 0, "remain": 8, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-27", "qty": 1.0}, {"lot": 2, "date": "2026-09-15", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "958ITF/958ITF1", "size": "50 KG", "dispatch": 0, "remain": 0, "min": 4.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913", "size": "50 KG", "dispatch": 0, "remain": 53, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-31", "qty": 2.0}, {"lot": 2, "date": "2026-08-05", "qty": 1.0}, {"lot": 3, "date": "2026-08-13", "qty": 8.0}, {"lot": 4, "date": "2026-08-15", "qty": 7.0}, {"lot": 5, "date": "2026-08-28", "qty": 7.0}, {"lot": 6, "date": "2026-09-03", "qty": 5.0}, {"lot": 7, "date": "2026-09-10", "qty": 5.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "929", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951", "size": "100 KG", "dispatch": 0, "remain": 4, "min": 3.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "958ITF/958ITF1", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913", "size": "100 KG", "dispatch": 0, "remain": 8, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-16", "qty": 8.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914L", "size": "100 KG", "dispatch": 0, "remain": 8, "min": 5.0, "status": "ok", "lots": [{"lot": 2, "date": "2026-08-24", "qty": 2.0}, {"lot": 3, "date": "2026-09-08", "qty": 6.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "924H", "size": "20 KG", "dispatch": 0, "remain": 47, "min": 5.0, "status": "ok", "lots": [{"lot": 1, "date": null, "qty": 47.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914L", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "924H", "size": "เศษ", "dispatch": 10.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946", "size": "20 KG", "dispatch": -10, "remain": 72, "min": 40.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "959", "size": "6 KG", "dispatch": 0, "remain": 17, "min": 6.0, "status": "ok", "lots": [{"lot": 1, "date": null, "qty": 17.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CC", "size": "100 KG", "dispatch": 0, "remain": 0, "min": 10.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "959", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913TXIB", "size": "50 KG", "dispatch": 0, "remain": 0, "min": 6.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "916", "size": "10 KG", "dispatch": 0, "remain": 17, "min": 10.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-21", "qty": 2.0}, {"lot": 2, "date": "2026-09-09", "qty": 15.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "925", "size": "10 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CC", "size": "20 KG", "dispatch": 0, "remain": 10, "min": 0.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-07-30", "qty": 5.0}, {"lot": 2, "date": "2026-09-15", "qty": 5.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913TXIB", "size": "100 KG", "dispatch": 0, "remain": 0, "min": 18.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "916", "size": "50 KG", "dispatch": 0, "remain": 0, "min": 2.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "925", "size": "25 KG", "dispatch": 0.0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946L", "size": "20 KG", "dispatch": 0, "remain": 5, "min": 4.0, "status": "ok", "lots": [{"lot": 2, "date": "2026-06-26", "qty": 5.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CC", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914FF", "size": "100 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913TXIB", "size": "เศษ", "dispatch": null, "remain": null, "min": 27.0, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "916", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "925", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946L", "size": "50 KG", "dispatch": 0, "remain": 0, "min": 4.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914FF", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946L", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CS", "size": "20 KG", "dispatch": 0, "remain": 34, "min": 10.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-01", "qty": 3.0}, {"lot": 2, "date": "2026-09-08", "qty": 10.0}, {"lot": 3, "date": "2026-09-17", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913N", "size": "20 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": [{"lot": 1, "date": "2026-08-10", "qty": 2.0}, {"lot": 2, "date": "2026-08-26", "qty": 3.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "918", "size": "20 KG ถัง", "dispatch": 0, "remain": 20, "min": 5.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "926", "size": "25 KG", "dispatch": 0, "remain": 95, "min": 20.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CS", "size": "50 KG", "dispatch": 0, "remain": 31, "min": 15.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-01", "qty": 6.0}, {"lot": 2, "date": "2026-09-08", "qty": 10.0}, {"lot": 3, "date": "2026-09-15", "qty": 15.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923TN", "size": "50 KG", "dispatch": 0, "remain": 2, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-14", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913N", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "918", "size": "10 KG", "dispatch": 0, "remain": 13, "min": 5.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-07", "qty": 20.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "926", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946P", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CS", "size": ".", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923TN", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913N", "size": "100 KG", "dispatch": 0, "remain": 0, "min": 20.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "918", "size": "50 KG", "dispatch": 0, "remain": 10, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-07-18", "qty": 4.0}, {"lot": 2, "date": "2026-07-20", "qty": 4.0}, {"lot": 3, "date": "2026-08-25", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946P", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913N", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": 8.0, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "918", "size": "100 KG", "dispatch": 0, "remain": 6, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-28", "qty": 2.0}, {"lot": 2, "date": "2026-09-12", "qty": 2.0}, {"lot": 3, "date": "2026-09-17", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "927", "size": "10 KG", "dispatch": 0, "remain": 0, "min": 0.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CS Red", "size": "20 KG", "dispatch": 0, "remain": 23, "min": 15.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923NR", "size": "20 KG", "dispatch": 0, "remain": 15, "min": null, "status": "unclassified", "lots": [{"lot": 2, "date": "2026-08-21", "qty": 5.0}, {"lot": 3, "date": "2026-09-09", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "918", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "927", "size": "50 KG", "dispatch": -1, "remain": 1, "min": 4.0, "status": "low", "lots": [{"lot": 2, "date": "2026-09-16", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "948DMT", "size": "20 KG", "dispatch": 0, "remain": 35, "min": 20.0, "status": "ok", "lots": [{"lot": 2, "date": "2026-08-31", "qty": 25.0}, {"lot": 3, "date": "2026-09-01", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CS Red", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923NR", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914", "size": "20 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": [{"lot": 1, "date": "2026-08-15", "qty": 6.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "927", "size": "100 KG", "dispatch": 0, "remain": 2, "min": 2.0, "status": "low", "lots": [{"lot": 1, "date": "2026-09-04", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "948DMT", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914", "size": "25 KG", "dispatch": 0, "remain": 0, "min": 0.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923LL", "size": "25 KG", "dispatch": 0, "remain": 11, "min": 4.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "927", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951PT1", "size": "25 KG", "dispatch": 0, "remain": 25, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2025-09-01", "qty": 1.0}, {"lot": 2, "date": "2026-09-07", "qty": 8.0}, {"lot": 3, "date": "2026-09-17", "qty": 8.0}, {"lot": 4, "date": "2026-09-18", "qty": 8.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "963", "size": "50 KG", "dispatch": 0, "remain": 13, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-21", "qty": 4.0}, {"lot": 2, "date": "2026-09-03", "qty": 4.0}, {"lot": 3, "date": "2026-09-05", "qty": 4.0}, {"lot": 6, "date": "2026-06-30", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914", "size": "50 KG", "dispatch": 0, "remain": 6, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-15", "qty": 1.0}, {"lot": 2, "date": "2026-08-27", "qty": 5.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923LL", "size": "50 KG", "dispatch": 0, "remain": 9, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-18", "qty": 5.0}, {"lot": 2, "date": "2026-09-07", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "947L1", "size": "100 KG", "dispatch": 0, "remain": 25, "min": 10.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-04", "qty": 5.0}, {"lot": 2, "date": "2026-09-09", "qty": 10.0}, {"lot": 3, "date": "2026-09-15", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951PT1", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "963", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914", "size": "เศษ", "dispatch": null, "remain": null, "min": 3.0, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "923LL", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "913", "size": "1000 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "947L1", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CC", "size": "10 KG", "dispatch": 0, "remain": 0, "min": 2.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "968", "size": "10 KG", "dispatch": 0, "remain": 20, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-07", "qty": 20.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914แกลอน", "size": "20 KG", "dispatch": 0, "remain": 6, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "917", "size": "100 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951CC", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "968", "size": "50 KG", "dispatch": 0, "remain": 4, "min": 4.0, "status": "low", "lots": [{"lot": 1, "date": "2026-08-11", "qty": 1.0}, {"lot": 2, "date": "2026-09-01", "qty": 4.0}, {"lot": 3, "date": "2026-09-02", "qty": 4.0}, {"lot": 4, "date": "2026-09-10", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "914แกลอน", "size": "1 KG", "dispatch": 0.0, "remain": 0.0, "min": 10.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961C", "size": "100 KG", "dispatch": 0.0, "remain": 2.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "968", "size": "100 KG", "dispatch": 0, "remain": 10, "min": 2.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "917", "size": "50 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "924L", "size": "20 KG", "dispatch": 0, "remain": 6, "min": null, "status": "unclassified", "lots": [{"lot": 2, "date": "2026-09-02", "qty": 6.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961C", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "968TXIB", "size": "10 KG", "dispatch": 0, "remain": 16, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "968", "size": "เศษ", "dispatch": 1.6, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946V", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "917SP", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "962", "size": "20 KG", "dispatch": 0.0, "remain": 5.0, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-03", "qty": 6.0}, {"lot": 2, "date": "2026-09-07", "qty": 8.0}, {"lot": 3, "date": "2026-09-12", "qty": 11.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951SNP", "size": "100 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "962", "size": "50 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961S", "size": "50 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961S", "size": "100 KG", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961", "size": "100 KG", "dispatch": 0.0, "remain": 4.0, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-10", "qty": 1.0}, {"lot": 2, "date": "2026-08-20", "qty": 1.0}, {"lot": 3, "date": "2026-08-27", "qty": 2.0}, {"lot": 4, "date": "2026-09-12", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "946V", "size": "20 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "935WEL", "size": "1000 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "951SNP", "size": "100 KG", "dispatch": 0.0, "remain": 7.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961", "size": "20 KG", "dispatch": 0.0, "remain": 3.0, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "1969-08-25", "qty": 3.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "958ITF", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "968", "size": "100 KG", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961SL2", "size": "10 KG", "dispatch": 0, "remain": 50, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-02", "qty": 1.0}, {"lot": 2, "date": "2026-09-14", "qty": 49.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "935", "size": "100 KG", "dispatch": 0.0, "remain": 10.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "917SP", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961CA", "size": "50 KG", "dispatch": 0.0, "remain": 21, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-17", "qty": 21.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "961TI", "size": "50 KG", "dispatch": 0.0, "remain": 3.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด", "code": "917PSL3", "size": "20 KG", "dispatch": 0, "remain": 20, "min": null, "status": "unclassified", "lots": [{"lot": 2, "date": "2026-09-14", "qty": 20.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "904", "size": "50 KG", "dispatch": 0, "remain": 5, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-10", "qty": 1.0}, {"lot": 2, "date": "2026-08-18", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910SP", "size": "1200 KG", "dispatch": 0, "remain": 0, "min": 1.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932", "size": "10 KG", "dispatch": 0, "remain": 47, "min": 5.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-06", "qty": 10.0}, {"lot": 2, "date": "2026-08-24", "qty": 10.0}, {"lot": 3, "date": "2026-08-25", "qty": 22.0}, {"lot": 4, "date": "2026-09-17", "qty": 5.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934C", "size": "50 KG", "dispatch": 0, "remain": 10, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-31", "qty": 6.0}, {"lot": 2, "date": "2026-09-15", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937CC", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "940", "size": "50 KG", "dispatch": 0, "remain": 10, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-26", "qty": 1.0}, {"lot": 2, "date": "2026-08-28", "qty": 5.0}, {"lot": 3, "date": "2026-09-05", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "904", "size": "100 KG", "dispatch": 0, "remain": 0, "min": 1.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910SP", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932", "size": "50 KG", "dispatch": 0, "remain": 6, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-24", "qty": 6.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934C", "size": "100 KG", "dispatch": 0, "remain": 4, "min": 5.0, "status": "low", "lots": [{"lot": 2, "date": "2026-08-28", "qty": 2.0}, {"lot": 3, "date": "2026-09-07", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937CC", "size": "100 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "940", "size": "100 KG", "dispatch": 0, "remain": 3, "min": 2.0, "status": "ok", "lots": [{"lot": 2, "date": "2026-08-18", "qty": 1.0}, {"lot": 3, "date": "2026-09-15", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "904", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932", "size": "100 KG", "dispatch": 0, "remain": 4, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-24", "qty": 1.0}, {"lot": 2, "date": "2026-09-04", "qty": 2.0}, {"lot": 3, "date": "2026-09-17", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934C", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937CC", "size": "เศษ", "dispatch": 2.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "940", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910VA", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932", "size": "1000 KG", "dispatch": 0, "remain": 1, "min": 1.0, "status": "low", "lots": [{"lot": 2, "date": "2026-09-17", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "907CC", "size": "1000 KG", "dispatch": 0, "remain": 1, "min": 1.0, "status": "low", "lots": [{"lot": 1, "date": "2026-08-21", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910VA", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932", "size": "เศษ", "dispatch": 20.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934CC", "size": "25 KG", "dispatch": 0, "remain": 0, "min": 20.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937STJ", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "943C", "size": "50 KG", "dispatch": 0, "remain": 36, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-17", "qty": 9.0}, {"lot": 2, "date": "2026-07-18", "qty": 9.0}, {"lot": 3, "date": "2026-07-22", "qty": 9.0}, {"lot": 4, "date": "2026-07-31", "qty": 9.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "907CC", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934CC", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937STJ", "size": "100 KG", "dispatch": 0, "remain": 1, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-02", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "943C", "size": "10 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921", "size": "100 KG สมาย", "dispatch": 0, "remain": 0, "min": 5.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932P", "size": "50 KG", "dispatch": 0, "remain": 40, "min": 40.0, "status": "low", "lots": [{"lot": 1, "date": "2026-09-16", "qty": 40.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934CC", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937STJ", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "909/949", "size": "50 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921", "size": "100 KG ยูไน", "dispatch": 0, "remain": 1, "min": 2.0, "status": "low", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "932P", "size": "เศษ", "dispatch": 29.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "909/949", "size": "100 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934PTV", "size": "1100 KG", "dispatch": 0, "remain": 1, "min": 2.0, "status": "low", "lots": [{"lot": 1, "date": "2026-09-17", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937T", "size": "10 KG", "dispatch": 0, "remain": 21, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-10", "qty": 21.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "940T", "size": "50 KG", "dispatch": 0, "remain": 40, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-10", "qty": 20.0}, {"lot": 2, "date": "2026-09-11", "qty": 20.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "909/949", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934PTV", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937T", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "940T", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921C", "size": "50 KG", "dispatch": 0, "remain": 10, "min": 6.0, "status": "ok", "lots": [{"lot": 2, "date": "2026-08-25", "qty": 2.0}, {"lot": 3, "date": "2026-09-11", "qty": 8.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910C", "size": "10 KG", "dispatch": 0, "remain": 26, "min": 0.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-07-01", "qty": 15.0}, {"lot": 2, "date": "2026-07-08", "qty": 7.0}, {"lot": 3, "date": "2026-07-14", "qty": 2.0}, {"lot": 4, "date": "2026-08-15", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921C", "size": "100 KG", "dispatch": 0, "remain": 4, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-05", "qty": 2.0}, {"lot": 2, "date": "2026-09-11", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935N/TI", "size": "50 KG", "dispatch": 0, "remain": 21, "min": 20.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938", "size": "50 KG", "dispatch": 0, "remain": 5, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-14", "qty": 1.0}, {"lot": 2, "date": "2026-09-04", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "936C", "size": "50 KG", "dispatch": 0, "remain": 5, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-24", "qty": 3.0}, {"lot": 2, "date": "2026-09-17", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910C", "size": "50 KG", "dispatch": 0, "remain": 6, "min": 6.0, "status": "low", "lots": [{"lot": 1, "date": "2026-09-12", "qty": 2.0}, {"lot": 2, "date": "2026-09-17", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921C", "size": "10 KG", "dispatch": 0, "remain": 0, "min": 10.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "933", "size": "50 KG", "dispatch": 0, "remain": 17, "min": 6.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-11", "qty": 5.0}, {"lot": 2, "date": "2026-08-13", "qty": 1.0}, {"lot": 3, "date": "2026-08-22", "qty": 1.0}, {"lot": 4, "date": "2026-08-27", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935N/TI", "size": "100 KG", "dispatch": 0, "remain": 3, "min": 3.0, "status": "low", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "936C", "size": "10 KG", "dispatch": 0, "remain": 74, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-24", "qty": 23.0}, {"lot": 2, "date": "2026-09-17", "qty": 51.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910C", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921C", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "933", "size": "100 KG", "dispatch": 0, "remain": 23, "min": 6.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-10", "qty": 6.0}, {"lot": 2, "date": "2026-09-17", "qty": 11.0}, {"lot": 3, "date": "2026-09-18", "qty": 6.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935N/TI", "size": "1100 KG", "dispatch": 0, "remain": 2, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "933", "size": "1000 KG", "dispatch": 0, "remain": 1, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-08", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935N/TI", "size": "เศษ", "dispatch": 5.3, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938L", "size": "50 KG", "dispatch": 0, "remain": 5, "min": null, "status": "unclassified", "lots": [{"lot": 2, "date": "2026-08-07", "qty": 1.0}, {"lot": 3, "date": "2026-09-09", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910Cไพทูร", "size": "25 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921PT", "size": "25 KG", "dispatch": 0, "remain": 1, "min": 6.0, "status": "low", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "933", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938L", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921ยูไนเต็ด", "size": "10 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910Cไพทูร", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921PT", "size": "10 KG", "dispatch": 0, "remain": 101, "min": 5.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-22", "qty": 1.0}, {"lot": 2, "date": "2026-09-09", "qty": 100.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937", "size": "50 KG", "dispatch": -3, "remain": 15, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-08", "qty": 6.0}, {"lot": 2, "date": "2026-09-11", "qty": 12.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921ยูไนเต็ด", "size": "50 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921PT", "size": "เศษ", "dispatch": 4.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "933M", "size": "1000 KG", "dispatch": 0, "remain": 0, "min": 1.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937", "size": "100 KG", "dispatch": 0, "remain": 5, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-04", "qty": 2.0}, {"lot": 2, "date": "2026-09-11", "qty": 1.0}, {"lot": 3, "date": "2026-09-15", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938LL", "size": "100 KG", "dispatch": 0, "remain": 1, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-18", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910C บางกอก", "size": "100 KG", "dispatch": 0, "remain": 0, "min": 10.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "933M", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938LL", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910C บางกอก", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921STJ1", "size": "100 KG", "dispatch": 0, "remain": 6, "min": 4.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-02", "qty": 4.0}, {"lot": 2, "date": "2026-09-17", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "921STJ1", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934", "size": "50 KG", "dispatch": -1, "remain": 1, "min": null, "status": "unclassified", "lots": [{"lot": 2, "date": "2026-09-09", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937C", "size": "10 KG", "dispatch": 0, "remain": 10, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-01", "qty": 8.0}, {"lot": 2, "date": "2026-09-01", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938S ฟงซัน", "size": "1000 KG", "dispatch": 0, "remain": 5, "min": 2.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CC", "size": "10 KG", "dispatch": 0, "remain": 247, "min": 100.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-07-21", "qty": 95.0}, {"lot": 2, "date": "2026-09-01", "qty": 19.0}, {"lot": 3, "date": "2026-09-04", "qty": 50.0}, {"lot": 4, "date": "2026-09-18", "qty": 44.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934", "size": "100 KG", "dispatch": 0, "remain": 10, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-12", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937C", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938S ฟงซัน", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CC", "size": "50 KG", "dispatch": 0, "remain": 5, "min": 6.0, "status": "low", "lots": [{"lot": 1, "date": "2026-09-04", "qty": 5.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930", "size": "50 KG", "dispatch": 0, "remain": 2, "min": 4.0, "status": "low", "lots": [{"lot": 1, "date": "2026-08-19", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935TCP2", "size": "1000 KG", "dispatch": 0, "remain": 6, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-09-16", "qty": 3.0}, {"lot": 2, "date": "2026-09-17", "qty": 2.0}, {"lot": 3, "date": "2026-09-18", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CC", "size": "100 KG", "dispatch": 0, "remain": 2, "min": 4.0, "status": "low", "lots": [{"lot": 1, "date": "2026-09-01", "qty": 2.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930", "size": "100 KG", "dispatch": 0, "remain": 4, "min": 2.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-09-11", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937C", "size": "50 KG", "dispatch": 0, "remain": 0, "min": 2.0, "status": "out", "lots": [{"lot": 1, "date": "2026-08-01", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "939 / 939C", "size": "50 KG", "dispatch": 0, "remain": 11, "min": 6.0, "status": "ok", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CC", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934 T-5", "size": "1000 KG", "dispatch": 0, "remain": 0, "min": 2.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937C", "size": "100 KG", "dispatch": 0, "remain": 2, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-22", "qty": 1.0}, {"lot": 2, "date": "2026-09-01", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "939 / 939C", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937C", "size": "1000 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935TI2", "size": "50 KG", "dispatch": 0.0, "remain": 40, "min": null, "status": "unclassified", "lots": [{"lot": 2, "date": "2026-09-11", "qty": 20.0}, {"lot": 3, "date": "2026-09-12", "qty": 20.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910SN", "size": "1000 KG", "dispatch": 0, "remain": 3, "min": 1.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-28", "qty": 1.0}, {"lot": 2, "date": "2026-08-31", "qty": 1.0}, {"lot": 3, "date": "2026-09-03", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937C", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CHนารายณ์", "size": "20 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910SN", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930", "size": "20 KG", "dispatch": 0, "remain": 25, "min": 20.0, "status": "ok", "lots": [{"lot": 1, "date": "2026-08-07", "qty": 25.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930T", "size": "50 KG", "dispatch": 0, "remain": 4, "min": 2.0, "status": "ok", "lots": [{"lot": 2, "date": "2026-09-14", "qty": 4.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930T", "size": "10 KG", "dispatch": 0, "remain": 35, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-21", "qty": 10.0}, {"lot": 2, "date": "2026-09-15", "qty": 10.0}, {"lot": 4, "date": "2026-08-03", "qty": 5.0}, {"lot": 5, "date": "2026-09-01", "qty": 10.0}, {"lot": 6, "date": "2026-09-15", "qty": 10.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910NP", "size": "100 KG", "dispatch": 0.0, "remain": 0.0, "min": 2.0, "status": "out", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930T", "size": "เศษ", "dispatch": 0.0, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930L", "size": "100 KG", "dispatch": 0, "remain": 3, "min": 3.0, "status": "low", "lots": [{"lot": 1, "date": "2026-08-08", "qty": 3.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CH", "size": "20 KG", "dispatch": 0.0, "remain": 40, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-06-06", "qty": 10.0}, {"lot": 2, "date": "2026-06-22", "qty": 30.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CH", "size": "เศษ", "dispatch": null, "remain": null, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938L1", "size": "100 KG", "dispatch": 0.0, "remain": 3.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910CB1", "size": "100 KG", "dispatch": 0, "remain": 0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910KS1", "size": "1000 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935PK", "size": "500 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "AC005", "size": "20 KG", "dispatch": 0.0, "remain": 92.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934J", "size": "100 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934J", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930C", "size": "50 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930C", "size": "100 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938LL", "size": "100 KG", "dispatch": 0.0, "remain": 3.0, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-08-18", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "937STJ", "size": "100 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": [{"lot": 1, "date": "2026-07-02", "qty": 1.0}]}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938G", "size": "50 KG", "dispatch": 0.0, "remain": 3.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935T5", "size": "1000 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "910SL", "size": "100 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "938G", "size": "100 KG", "dispatch": 0.0, "remain": 5.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934J", "size": "100 KG", "dispatch": 0.0, "remain": 2.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "913J", "size": "1000 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "930SP", "size": "20 KG", "dispatch": 0.0, "remain": 25.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "934J", "size": "20 KG", "dispatch": 0.0, "remain": 10.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935N", "size": "5 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935T5", "size": "1000 KG", "dispatch": 0.0, "remain": 1.0, "min": null, "status": "unclassified", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "946v", "size": "20 KG", "dispatch": 0.0, "remain": 0.0, "min": null, "status": "out_nomin", "lots": []}, {"section": "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์", "code": "935", "size": "100 KG", "dispatch": 0.0, "remain": 10.0, "min": null, "status": "unclassified", "lots": []}]
+;
+
+const SECTION_SHORT = {
+  "คลังสินค้าสำเร็จรูปกาวพิเศษ,พลาสติก,UV,หัวฉีด": "กาวพิเศษ/พลาสติก/UV/หัวฉีด",
+  "คลังสินค้าสำเร็จรูปกาวธรรมดา , กาวเด็กตรินท์": "กาวธรรมดา/กาวเด็กตรินท์"
+};
+
+const STATUS_META = {
+  out:          { label: "หมดสต๊อก",      cls: "st-out",  color: "var(--red)"   },
+  low:          { label: "ใกล้หมด",        cls: "st-low",  color: "var(--amber)" },
+  ok:           { label: "ปกติ",           cls: "st-ok",   color: "var(--green)" },
+  out_nomin:    { label: "หมด (ไม่มี Min)", cls: "st-out_nomin", color: "var(--grey-status)" },
+  unclassified: { label: "ไม่ได้ตั้ง Min",  cls: "st-unclassified", color: "var(--grey-status)" }
+};
+
+function fmt(n) {
+  if (n === null || n === undefined) return "\u2014";
+  return Number.isInteger(n) ? n.toString() : n.toFixed(1);
+}
+
+function renderKpisAndBars() {
+  const codes = new Set(RECORDS.map(r => r.code));
+  const urgentCount = RECORDS.filter(r => r.status === 'out' || r.status === 'low').length;
+  const noMinZero = RECORDS.filter(r => r.status === 'out_nomin').length;
+  document.getElementById('kpi-total-codes').textContent = codes.size;
+  document.getElementById('kpi-total-lines').textContent = RECORDS.length;
+  document.getElementById('kpi-urgent').textContent = urgentCount;
+  document.getElementById('kpi-nozero').textContent = noMinZero;
+
+  const sections = [...new Set(RECORDS.map(r => r.section))];
+  const barsEl = document.getElementById('section-bars');
+  barsEl.innerHTML = '';
+  sections.forEach(sec => {
+    const items = RECORDS.filter(r => r.section === sec);
+    const counts = { out: 0, low: 0, ok: 0, other: 0 };
+    items.forEach(r => {
+      if (r.status === 'out') counts.out++;
+      else if (r.status === 'low') counts.low++;
+      else if (r.status === 'ok') counts.ok++;
+      else counts.other++;
+    });
+    const total = items.length;
+    const title = document.createElement('div');
+    title.style.cssText = "font-size:13px;font-weight:500;margin:10px 0 6px;";
+    title.textContent = (SECTION_SHORT[sec] || sec) + "  \u00b7  " + total + " \u0e23\u0e32\u0e22\u0e01\u0e32\u0e23";
+    barsEl.appendChild(title);
+
+    const segWrap = document.createElement('div');
+    segWrap.style.cssText = "display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--panel-2);margin-bottom:6px;";
+    [['out','var(--red)'],['low','var(--amber)'],['ok','var(--green)'],['other','var(--grey-status)']].forEach(([k,c]) => {
+      if (counts[k] > 0) {
+        const seg = document.createElement('div');
+        seg.style.cssText = `width:${(counts[k]/total*100)}%;background:${c};`;
+        segWrap.appendChild(seg);
+      }
+    });
+    barsEl.appendChild(segWrap);
+
+    const legend = document.createElement('div');
+    legend.style.cssText = "display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--text-dim);margin-bottom:4px;";
+    legend.innerHTML = `
+      <span><span class="dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--red);margin-inline-end:4px;"></span>\u0e2b\u0e21\u0e14 ${counts.out}</span>
+      <span><span class="dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--amber);margin-inline-end:4px;"></span>\u0e43\u0e01\u0e25\u0e49\u0e2b\u0e21\u0e14 ${counts.low}</span>
+      <span><span class="dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-inline-end:4px;"></span>\u0e1b\u0e01\u0e15\u0e34 ${counts.ok}</span>
+      <span><span class="dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--grey-status);margin-inline-end:4px;"></span>\u0e2d\u0e37\u0e48\u0e19\u0e46 ${counts.other}</span>
+    `;
+    barsEl.appendChild(legend);
+  });
+}
+
+let currentFilter = 'urgent';
+let currentSearch = '';
+
+function statusMatchesFilter(status, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'urgent') return status === 'out' || status === 'low';
+  if (filter === 'ok') return status === 'ok';
+  if (filter === 'unclassified') return status === 'unclassified' || status === 'out_nomin';
+  return true;
+}
+
+function renderTable() {
+  const body = document.getElementById('tbl-body');
+  body.innerHTML = '';
+  let rows = RECORDS.filter(r => statusMatchesFilter(r.status, currentFilter));
+  if (currentSearch.trim()) {
+    const q = currentSearch.trim().toLowerCase();
+    rows = rows.filter(r => r.code.toLowerCase().includes(q));
+  }
+  const statusOrder = { out: 0, low: 1, unclassified: 2, out_nomin: 2, ok: 3 };
+  rows.sort((a,b) => {
+    const so = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+    if (so !== 0) return so;
+    return a.code.localeCompare(b.code, 'th');
+  });
+
+  document.getElementById('tbl-count-label').textContent = `(${rows.length})`;
+
+  if (rows.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="7">\u0e44\u0e21\u0e48\u0e1e\u0e1a\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e17\u0e35\u0e48\u0e15\u0e23\u0e07\u0e01\u0e31\u0e1a\u0e15\u0e31\u0e27\u0e01\u0e23\u0e2d\u0e07</td></tr>';
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    const meta = STATUS_META[r.status];
+    const hasLots = Array.isArray(r.lots) && r.lots.length > 0;
+    if (hasLots) tr.classList.add('has-lots');
+    tr.innerHTML = `
+      <td class="code">${r.code}</td>
+      <td>${r.size}</td>
+      <td>${SECTION_SHORT[r.section] || r.section}</td>
+      <td class="num">${fmt(r.dispatch)}</td>
+      <td class="num">${fmt(r.remain)}</td>
+      <td class="num">${fmt(r.min)}</td>
+      <td><span class="status-tag ${meta.cls}"><span class="dot" style="background:${meta.color}"></span>${meta.label}</span></td>
+    `;
+    frag.appendChild(tr);
+
+    const detailTr = document.createElement('tr');
+    detailTr.className = 'lot-detail-row';
+    const detailTd = document.createElement('td');
+    detailTd.colSpan = 7;
+    if (hasLots) {
+      const chips = r.lots
+        .slice()
+        .sort((a, b) => (a.lot ?? 0) - (b.lot ?? 0))
+        .map(l => {
+          const dateStr = l.date ? l.date : '\u2014';
+          const qtyStr = (typeof l.qty === 'number') ? fmt(l.qty) : '\u2014';
+          return `<span class="lot-chip">LOT ${l.lot} \u00b7 <b>${dateStr}</b> \u00b7 ${qtyStr}</span>`;
+        })
+        .join('');
+      detailTd.innerHTML = `<div class="lot-chips">${chips}</div>`;
+    } else {
+      detailTd.innerHTML = `<span class="no-lots">\u0e44\u0e21\u0e48\u0e21\u0e35\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25 Lot \u0e2a\u0e33\u0e2b\u0e23\u0e31\u0e1a\u0e23\u0e32\u0e22\u0e01\u0e32\u0e23\u0e19\u0e35\u0e49</span>`;
+    }
+    detailTr.appendChild(detailTd);
+    frag.appendChild(detailTr);
+
+    if (hasLots) {
+      tr.addEventListener('click', () => {
+        tr.classList.toggle('expanded');
+        detailTr.classList.toggle('open');
+      });
+    }
+  });
+  body.appendChild(frag);
+}
+
+document.querySelectorAll('.chip[data-filter-status]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip[data-filter-status]').forEach(c => c.removeAttribute('data-active'));
+    chip.setAttribute('data-active', '1');
+    currentFilter = chip.getAttribute('data-filter-status');
+    renderTable();
+  });
+});
+
+document.getElementById('search').addEventListener('input', (e) => {
+  currentSearch = e.target.value;
+  renderTable();
+});
+
+function renderAll() {
+  renderKpisAndBars();
+  renderTable();
+}
+
+renderAll();
+</script>
+</body>
+</html>
